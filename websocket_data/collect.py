@@ -16,6 +16,8 @@ import concurrent.futures
 from datetime import timezone, datetime
 from catboost import CatBoostClassifier
 from websocket_data import data_path
+from trader import dev_trader
+from order import market_interaction
 
 
 logging.basicConfig(level=logging.WARNING)
@@ -24,7 +26,9 @@ LOG = logging.getLogger(__name__)
 
 
 class upbit_websocket:
+    initial_krw = 1250000
     def __init__(self, coins, balance, mode, trade):
+        self.trading_coins = ['KRW-BTC', 'KRW-ETC']
         self.coins = coins
         self.balance = balance
         self.mode = mode
@@ -62,7 +66,9 @@ class upbit_websocket:
             coin : 0 for coin in coins
         }
         self.trial = 0
-        print(self.data)
+        self.dev_cut = {
+        'KRW-BTC': 1.5e-10, 'KRW-ETH': 3e-9
+        }
     
     async def collect_ticker(self):
         url = "wss://api.upbit.com/websocket/v1"
@@ -72,6 +78,8 @@ class upbit_websocket:
         #create folder to store data
         if not os.path.exists(f'{data_path}/ticker/{date}'):
             os.mkdir(f'{data_path}/ticker/{date}')
+            
+        trade_dev = dev_trader(self.trading_coins, self.initial_krw)
         
         while True:
             try:
@@ -116,7 +124,11 @@ class upbit_websocket:
                                 dev = sign*self.data['acc_trade_vol'][-1]/tot_vol
                             self.data['dev'].append(dev)
                             self.cache_vol[coin] = self.data['acc_trade_vol'][-1]
-                        
+                        #run trader!!
+                        if self.trade == 'trade':
+                            trade_dev.run_trader(
+                                coin, raw['trade_price'], self.dev_cut, dev
+                                )
                         #save file
                         file_path = f'{data_path}/ticker/{date}/upbit_volume_{self.trial}.csv'
                         df1 = pd.DataFrame(self.data)

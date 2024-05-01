@@ -30,8 +30,9 @@ class market_interaction:
         self.orders = {coin: 
             {'order': [], 'order_time': 0, 'oder_id': 0, 'state': 0}
             for coin in coins}
-        self.cash = 100000
         self.balance = {'KRW': initial_krw}
+        self.profit = {coin: 1 for coin in coins}
+        self.transaction = 0.9995**2
         
     def round_sigfigs(self, num, sig_figs):
         if num != 0:
@@ -47,7 +48,7 @@ class market_interaction:
     def update_balance(self, coin, amount, action):
         upbit = pyupbit.Upbit(self.key_u, self.secret_u)
         if action == 'buy':
-            self.balance['KRW'] -= 10000
+            self.balance['KRW'] = 0
             self.balance[coin] = float(amount)
         elif action  == 'sell':
             self.balance[coin] = 0
@@ -59,11 +60,12 @@ class market_interaction:
             self.balance[coin] = upbit_balance
             
     
-    def update_status(self, coin, order, action):
+    def update_status(self, coin, order, action, price):
         self.orders[coin]['order'] = order
         self.orders[coin]['order_time'] = time.time()
         self.orders[coin]['order_id'] = order['uuid']
         self.orders[coin]['state'] = order['state']
+        self.order_instance[coin] = [price, time.time()]
         self.status[coin] = action
         
     def insert_order(self, coin, action, current_price, amount):
@@ -76,6 +78,7 @@ class market_interaction:
             LOG.info(order)
             pprint.pprint(order)
             self.update_status(coin, order, action)
+            self.update_balance(coin, amount, action)
             return order
         
         elif action == 'sell':
@@ -85,6 +88,7 @@ class market_interaction:
             LOG.info('order submitted')
             LOG.info(order)
             self.update_status(coin, order, action)
+            self.update_balance(coin, amount, action)
             return order
         
     def market_buy(self, coin, amount):
@@ -109,14 +113,16 @@ class market_interaction:
         )
         return resp 
     
-    def get_order(self, orderID):
+    def get_order(self, orderID, coin):
         upbit = pyupbit.Upbit(self.key_u, self.secret_u)
 
         resp = upbit.get_order(
             orderID
         )
+        self.orders[coin]['order_id'] = resp['uuid']
+        self.orders[coin]['state'] = resp['state']
         #LOG.info(f'remaining order: {resp}')
-        return resp 
+        
     
     
     
@@ -126,7 +132,7 @@ class market_interaction:
               self.status[coin] == 'buy' and 
               self.orders[coin]['state'] == 'wait'):
             
-            LOG.info(f'cancelling the orders for {coin}')
+            LOG.info(f'cancelling buying orders for {coin}')
             LOG.info(f'balance before: {self.balance}')
             self.cancel_order(self.orders[coin]['order_id'])
             self.status[coin] = 'sold'
