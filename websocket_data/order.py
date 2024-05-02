@@ -56,7 +56,7 @@ class market_interaction:
         elif action == 'sold' or action == 'bought':
             upbit_balance = upbit.get_balance(coin)
             krw_balance = upbit.get_balance('KRW')
-            self.balance['KRW'] = krw_balance
+            self.balance['KRW'] = 10000
             self.balance[coin] = upbit_balance
             
     
@@ -139,7 +139,7 @@ class market_interaction:
             self.update_balance(coin, 0, self.status[coin])
             LOG.info(f'current {coin} balance: {self.balance} status: {self.status[coin]}')
    
-        elif (now-self.orders[coin]>40000 and 
+        elif (now-self.order_instance[coin][1]>40000 and 
               self.status[coin] == 'buy' and 
               self.orders[coin]['state'] == 'wait'):
             

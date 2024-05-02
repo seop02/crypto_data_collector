@@ -1,4 +1,4 @@
-from order import market_interaction
+from websocket_data.order import market_interaction
 import logging
 import time
 import ccxt
@@ -14,12 +14,12 @@ LOG = logging.getLogger(__name__)
 
 
 class dev_trader(market_interaction):
-    def update_order(self, coin):
+    def update_order(self, coin, profit_cut):
         if self.status[coin] == 'buy' or self.status[coin] == 'sell':
             self.get_order(self.orders[coin]['order_id'], coin)
             if self.orders[coin]['state'] != 'wait':
                 if self.status[coin] == 'buy':
-                    target_price = (1.03*self.order_instance[coin][0])/self.transaction
+                    target_price = (profit_cut[coin]*self.order_instance[coin][0])/self.transaction
                     if coin == 'KRW-BTC':
                         target_price= self.round_sigfigs(target_price, 5)
                     else:
@@ -36,7 +36,7 @@ class dev_trader(market_interaction):
         if self.status[coin] != 'sold':
             self.profit[coin] = (self.transaction*price)/self.order_instance[coin][0]
     
-    def sell_protocol(self, coin, price):
+    def sell_protocol(self, coin, price, profit_cut):
         now = time.time()
         if self.profit[coin] <= -0.05 and (self.status[coin] == 'bought' or self.status[coin] == 'sell'):
             if self.status[coin] == 'SELL':
@@ -63,7 +63,7 @@ class dev_trader(market_interaction):
             self.insert_order(coin, 'sell', price, a)
             
         if self.status[coin] == 'buy' or self.status[coin] == 'sell':
-            self.update_order(coin)
+            self.update_order(coin, profit_cut)
         self.cancel_protocol(coin)
     
     def scalp(self, coin, price, dev_cut, dev):
@@ -77,7 +77,7 @@ class dev_trader(market_interaction):
         elif self.status[coin] == 'sold' and self.balance['KRW'] < 5100 and dev > dev_cut[coin]:
             LOG.info(f'buying signal generated for {coin} for price: {price} but could not buy')
             
-    def run_trader(self, coin, price, dev_cut, dev):
+    def run_trader(self, coin, price, dev_cut, dev, profit_cut):
         self.scalp(coin, price, dev_cut, dev)
-        self.update_profit(coin)
-        self.sell_protocol(coin, price)
+        self.update_profit(coin, price)
+        self.sell_protocol(coin, price, profit_cut)
