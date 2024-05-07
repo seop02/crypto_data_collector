@@ -1,4 +1,4 @@
-from websocket_data.order import market_interaction
+from upbit_websocket_collect.order import market_interaction
 import logging
 import time
 import ccxt

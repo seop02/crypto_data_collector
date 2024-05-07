@@ -14,10 +14,10 @@ import asyncio
 import multiprocessing
 import concurrent.futures
 from datetime import timezone, datetime
-from catboost import CatBoostClassifier
-from websocket_data import data_path
-from websocket_data.trader import dev_trader
-from websocket_data.order import market_interaction
+import pymongo
+from upbit_websocket_collect import data_path
+from upbit_websocket_collect.trading import dev_trader
+from upbit_websocket_collect.order import market_interaction
 
 
 logging.basicConfig(level=logging.WARNING)
@@ -31,6 +31,20 @@ class upbit_websocket:
         self.coins = coins
         self.balance = balance
         self.mode = mode
+        self.transaction = 0.9995**2
+        self.trade = trade
+        self.cache_vol = {
+            coin : 0 for coin in coins
+        }
+        self.dev_cut = {
+        'KRW-BTC': 1.5e-10, 'KRW-GLM': 5.42e-05
+        }
+        self.trading_coins = list(self.dev_cut.keys())
+        self.profit_cut = {
+            'KRW-BTC': 1.03, 'KRW-GLM': 1.2
+        }
+        self.trade = ['trade', 'no_trade']
+        self.trial = 0
         if mode == 'ticker':
             self.data = {
                 'coin': [],
@@ -58,22 +72,9 @@ class upbit_websocket:
                 'bid_vol2': [],
                 'bid_price3': [],
                 'bid_vol3': []
-            }
-        self.transaction = 0.9995**2
-        self.trade = trade
-        self.cache_vol = {
-            coin : 0 for coin in coins
-        }
-        self.trial = 0
-        self.dev_cut = {
-        'KRW-BTC': 1.5e-10, 'KRW-ETH': 3e-9
-        }
-        self.trading_coins = list(self.dev_cut.keys())
-        self.profit_cut = {
-            'KRW-GLM': 1.2
-        }
+            } 
     
-    async def collect_ticker(self, trading_status, trade_coins):
+    async def collect_ticker(self):
         url = "wss://api.upbit.com/websocket/v1"
         now = datetime.now()
         date = now.strftime("%Y-%m-%d")
@@ -83,13 +84,17 @@ class upbit_websocket:
             os.mkdir(f'{data_path}/ticker/{date}')
             
         trade_dev = dev_trader(self.trading_coins, self.initial_krw)
+        # if trading_status == True:
+        #     file_name = self.trade[0]
+        # else:
+        #     file_name = self.trade[1]
         
         while True:
             try:
                 async with websockets.connect(url) as ws:
                     payload = [
                         {"ticket": "your-ticket"}, 
-                        {"type": self.mode, "codes": trade_coins}]  
+                        {"type": self.mode, "codes": self.coins}]  
                     await ws.send(json.dumps(payload))
                     while True:
                         try:
@@ -128,7 +133,7 @@ class upbit_websocket:
                             self.data['dev'].append(dev)
                             self.cache_vol[coin] = self.data['acc_trade_vol'][-1]
                         #run trader!!
-                        if trading_status == True:
+                        if coin in self.trading_coins:
                             trade_dev.run_trader(
                                 coin, raw['trade_price'], self.dev_cut, dev, self.profit_cut
                                 )
@@ -137,16 +142,16 @@ class upbit_websocket:
                         df1 = pd.DataFrame(self.data)
                         df1.to_csv(file_path)
                         #if current size is over 2000 flush current data
-                        if len(self.data['coin']) >= 2000:
-                            root_path = f'{data_path}/ticker/{date}/upbit_volume.csv'
-                            if self.trial == 0:
-                                df = pd.DataFrame(self.data)
-                                df.to_csv(root_path)
-                            else:
-                                df = pd.read_csv(root_path, index_col=0)
-                                df = pd.concat([df, df1], ignore_index=True)
-                                df.to_csv(root_path)
-                            os.remove(file_path)
+                        if len(self.data['coin']) >= 1500:
+                            # root_path = f'{data_path}/ticker/{date}/{file_name}_upbit_volume.csv'
+                            # if self.trial == 0:
+                            #     df = pd.DataFrame(self.data)
+                            #     df.to_csv(root_path)
+                            # else:
+                            #     df = pd.read_csv(root_path, index_col=0)
+                            #     df = pd.concat([df, df1], ignore_index=True)
+                            #     df.to_csv(root_path)
+                            # os.remove(file_path)
                             self.data['coin'] = self.data['coin'][-1:]
                             self.data['traded_price'] = self.data['traded_price'][-1:]
                             self.data['acc_trade_vol'] = self.data['acc_trade_vol'][-1:]
@@ -169,8 +174,7 @@ class upbit_websocket:
         )
                         
     def run(self):
-        no_coins = list(set(self.coins)-set(self.trading_coins))
-        asyncio.run(self.main(self.trading_coins, no_coins))
+        asyncio.run(self.collect_ticker())
                         
                         
                         
