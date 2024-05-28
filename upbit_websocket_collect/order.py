@@ -33,6 +33,8 @@ class market_interaction:
         self.balance = {'KRW': initial_krw}
         self.profit = {coin: 1 for coin in coins}
         self.transaction = 0.9995**2
+        self.bought_instance = {coin: [0, 0] for coin in coins}
+        self.i = 1
         
     def round_sigfigs(self, num, sig_figs):
         if num != 0:
@@ -48,16 +50,28 @@ class market_interaction:
     def update_balance(self, coin, amount, action):
         upbit = pyupbit.Upbit(self.key_u, self.secret_u)
         if action == 'buy':
-            self.balance['KRW'] = 0
-            self.balance[coin] = float(amount)
+            upbit_balance = upbit.get_balance(coin)
+            krw_balance = upbit.get_balance('KRW')
+            self.balance['KRW'] = krw_balance
+            self.balance[coin] = upbit_balance
         elif action  == 'sell':
-            self.balance[coin] = 0
-            self.balance['KRW'] += amount
+            upbit_balance = upbit.get_balance(coin)
+            krw_balance = upbit.get_balance('KRW')
+            self.balance['KRW'] = krw_balance
+            self.balance[coin] = upbit_balance
         elif action == 'sold' or action == 'bought':
             upbit_balance = upbit.get_balance(coin)
             krw_balance = upbit.get_balance('KRW')
-            self.balance['KRW'] = 10000
+            self.balance['KRW'] = krw_balance
             self.balance[coin] = upbit_balance
+        
+            if self.balance[coin] == 0:
+                self.status[coin] = 'sold'
+            else:
+                self.status[coin] = 'bought'
+                LOG.info(f'status: {self.status[coin]}')
+                
+            LOG.info(f'balance: {self.balance[coin]} status after update: {self.status[coin]}')
             
     
     def update_status(self, coin, order, action, price):
@@ -74,20 +88,21 @@ class market_interaction:
             price = current_price
             LOG.info(f'buying with current price: {price} currency: {coin} amount: {amount}')
             order = upbit.buy_limit_order(coin, price, amount)
-            LOG.info('order submitted')
-            LOG.info(order)
-            pprint.pprint(order)
-            self.update_status(coin, order, action)
+            #LOG.info('order submitted')
+            #LOG.info(order)
+            #pprint.pprint(order)
+            self.update_status(coin, order, action, price)
             self.update_balance(coin, amount, action)
+            self.bought_instance[coin] = [price, time.time()]
             return order
         
         elif action == 'sell':
             price = current_price
             LOG.info(f'selling with current price: {price} currency: {coin} amount: {amount}')
             order = upbit.sell_limit_order(coin, price, amount)
-            LOG.info('order submitted')
-            LOG.info(order)
-            self.update_status(coin, order, action)
+            #LOG.info('order submitted')
+            #LOG.info(order)
+            self.update_status(coin, order, action, price)
             self.update_balance(coin, amount, action)
             return order
         
@@ -122,13 +137,10 @@ class market_interaction:
         self.orders[coin]['order_id'] = resp['uuid']
         self.orders[coin]['state'] = resp['state']
         #LOG.info(f'remaining order: {resp}')
-        
-    
-    
     
     def cancel_protocol(self, coin):
         now = time.time()
-        if (now-self.orders[coin]['order_time'] >20 and 
+        if (now-self.orders[coin]['order_time'] > 30 and 
               self.status[coin] == 'buy' and 
               self.orders[coin]['state'] == 'wait'):
             
@@ -137,10 +149,14 @@ class market_interaction:
             self.cancel_order(self.orders[coin]['order_id'])
             self.status[coin] = 'sold'
             self.update_balance(coin, 0, self.status[coin])
+            if self.balance[coin] == 0:
+                self.status[coin] = 'sold'
+            else:
+                self.status[coin] = 'bought'
             LOG.info(f'current {coin} balance: {self.balance} status: {self.status[coin]}')
    
-        elif (now-self.order_instance[coin][1]>40000 and 
-              self.status[coin] == 'buy' and 
+        elif (now-self.order_instance[coin][1]>4000 and 
+              self.status[coin] == 'sell' and 
               self.orders[coin]['state'] == 'wait'):
             
             LOG.info(f'cancelling the orders for {coin}')
@@ -150,6 +166,7 @@ class market_interaction:
             self.status[coin] = 'bought'
             self.update_balance(coin, 0, self.status[coin])
             LOG.info(f'balance after: {self.balance}')
+
             
 
             

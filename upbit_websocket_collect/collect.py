@@ -14,7 +14,7 @@ import asyncio
 import multiprocessing
 import concurrent.futures
 from datetime import timezone, datetime
-import pymongo
+from catboost import CatBoostClassifier
 from upbit_websocket_collect import data_path
 from upbit_websocket_collect.trading import dev_trader
 from upbit_websocket_collect.order import market_interaction
@@ -26,7 +26,8 @@ LOG = logging.getLogger(__name__)
 
 
 class upbit_websocket:
-    initial_krw = 10000
+    initial_krw = 1180000
+    duration = 100
     def __init__(self, coins, balance, mode, trade):
         self.coins = coins
         self.balance = balance
@@ -36,13 +37,21 @@ class upbit_websocket:
         self.cache_vol = {
             coin : 0 for coin in coins
         }
-        self.dev_cut = {
-        'KRW-BTC': 1.5e-10, 'KRW-GLM': 5.42e-05
-        }
+        self.dev_cut = {'KRW-BTC': 1.8e-10}
         self.trading_coins = list(self.dev_cut.keys())
         self.profit_cut = {
-            'KRW-BTC': 1.03, 'KRW-GLM': 1.2
+            coin: 1.1 for coin in self.trading_coins
         }
+        self.cache = {
+            coin: [0, 0, 0] for coin in coins
+            # start_time, start_vol, cache_vol
+        }
+        self.init = {
+            coin: True for coin in coins
+            # start_time, start_vol, cache_vol
+        }
+        # self.profit_cut['KRW-BTC'] = 1.01
+        # self.profit_cut['KRW-ETH'] = 1.01
         self.trade = ['trade', 'no_trade']
         self.trial = 0
         if mode == 'ticker':
@@ -54,7 +63,8 @@ class upbit_websocket:
                 'ask_bid': [],  
                 'high': [],
                 'dev': [0],
-                '24h_vol': []
+                '24h_vol': [],
+                f'{self.duration}_acc': []
             }
         elif mode == 'orderbook':
             self.data = {
@@ -73,6 +83,30 @@ class upbit_websocket:
                 'bid_price3': [],
                 'bid_vol3': []
             } 
+            
+    def compute_dev(self, vol_diff, tot_vol):
+        if self.data['ask_bid'][-1] == "ASK":
+            sign = -1
+        elif self.data['ask_bid'][-1] == "BID":
+            sign = 1
+        dev = (sign*vol_diff)/(tot_vol)
+        if vol_diff < 0: 
+            #means that the accumulate volume has been reset to zero
+            LOG.info('day has passed updating max_vol and start_price')
+            dev = sign*self.data['acc_trade_vol'][-1]/tot_vol
+        return dev
+    
+    def compute_acc_vol(self, coin, time):
+        time_diff = time-self.cache[coin][0]
+        if time_diff > self.duration:
+            self.cache[coin][0] = time
+            self.cache[coin][1] = self.data['acc_trade_vol'][-1]
+        sub_acc = self.data['acc_trade_vol'][-1] - self.cache[coin][1]
+        if sub_acc < 0:
+            self.cache[coin][1] = self.data['acc_trade_vol'][-1]
+            self.cache[coin][0] = time
+            sub_acc = 0
+        return sub_acc
     
     async def collect_ticker(self):
         url = "wss://api.upbit.com/websocket/v1"
@@ -106,14 +140,23 @@ class upbit_websocket:
                             await asyncio.sleep(1)
                             break
                         coin = raw['code']
+                        t = time.time()
+                        
                         tot_vol = raw['acc_trade_price_24h']
                         self.data['coin'].append(raw['code'])
                         self.data['traded_price'].append(raw['trade_price'])
                         self.data['acc_trade_vol'].append(raw['acc_trade_volume'])
                         self.data['high'].append(raw['high_price'])
                         self.data['ask_bid'].append(raw['ask_bid'])
-                        self.data['traded_time'].append(time.time())
+                        self.data['traded_time'].append(t)
                         self.data['24h_vol'].append(tot_vol)
+                        
+                        if self.init[coin] == True:
+                            self.cache[coin][1] = self.data['acc_trade_vol'][-1]
+                            self.init[coin] = False
+                        
+                        sub_acc = self.compute_acc_vol(coin, t)
+                        self.data[f'{self.duration}_acc'].append(sub_acc)
                         
                         if self.cache_vol[coin] == 0:
                             self.cache_vol[coin] = raw['acc_trade_volume']
@@ -121,28 +164,21 @@ class upbit_websocket:
                         #calculate the change in volume
                         if len(self.data['traded_time']) >= 2:
                             vol_diff = self.data['acc_trade_vol'][-1] - self.cache_vol[coin]
-                            if self.data['ask_bid'][-1] == "ASK":
-                                sign = -1
-                            elif self.data['ask_bid'][-1] == "BID":
-                                sign = 1
-                            dev = (sign*vol_diff)/(tot_vol)
-                            if vol_diff < 0: 
-                                #means that the accumulate volume has been reset to zero
-                                LOG.info('day has passed updating max_vol and start_price')
-                                dev = sign*self.data['acc_trade_vol'][-1]/tot_vol
+                            dev = self.compute_dev(vol_diff, tot_vol)
                             self.data['dev'].append(dev)
                             self.cache_vol[coin] = self.data['acc_trade_vol'][-1]
                         #run trader!!
-                        if coin in self.trading_coins:
-                            trade_dev.run_trader(
-                                coin, raw['trade_price'], self.dev_cut, dev, self.profit_cut
-                                )
+                        # if coin in self.trading_coins:
+                        #     #LOG.info('running trader!')
+                        #     trade_dev.run_trader(
+                        #         coin, raw['trade_price'], self.dev_cut, dev, self.profit_cut, raw['high_price']
+                        #         )
                         #save file
                         file_path = f'{data_path}/ticker/{date}/upbit_volume_{self.trial}.csv'
                         df1 = pd.DataFrame(self.data)
                         df1.to_csv(file_path)
                         #if current size is over 2000 flush current data
-                        if len(self.data['coin']) >= 1500:
+                        if len(self.data['coin']) >= 3000:
                             # root_path = f'{data_path}/ticker/{date}/{file_name}_upbit_volume.csv'
                             # if self.trial == 0:
                             #     df = pd.DataFrame(self.data)
@@ -160,6 +196,7 @@ class upbit_websocket:
                             self.data['traded_time'] = self.data['traded_time'][-1:]
                             self.data['24h_vol'] = self.data['24h_vol'][-1:]
                             self.data['dev'] = self.data['dev'][-1:]
+                            self.data[f'{self.duration}_acc'] = self.data[f'{self.duration}_acc'][-1:]
                             self.trial += 1
             except Exception as e:
                 LOG.info('Error while receving data')
